@@ -1,122 +1,82 @@
-// plugins/viewonce.js
-const fs = require('fs');
-const path = require('path');
+// 🌟 Silva MD Plugin — View Once Media Opener (by Bilal, fixed for Silva MD)
+const { downloadContentFromMessage } = require("@whiskeysockets/baileys");
 
 module.exports = {
-    name: 'viewonce',
-    commands: ['vv'],
-    handler: async ({ sock, m, sender, contextInfo }) => {
+    commands: ['vv', 'antivv', 'avv', 'viewonce', 'open', 'openphoto', 'openvideo', 'vvphoto'],
+    handler: async ({ sock, m, sender, contextInfo = {} }) => {
         try {
-            // Check if message is a reply
-            if (!m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-                return sock.sendMessage(sender, {
-                    text: '❌ Please reply to a view-once message with .vv',
-                    contextInfo: contextInfo
+            const fromMe = m.key.fromMe;
+            const isCreator = fromMe;
+            const quoted = m.quoted ? m.quoted : m.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+
+            // Initial react 😃
+            await sock.sendMessage(sender, { react: { text: '😃', key: m.key } });
+
+            // Owner-only check
+            if (!isCreator) return;
+
+            // If no media is replied to
+            if (!quoted) {
+                await sock.sendMessage(sender, { react: { text: '😊', key: m.key } });
+                return await sock.sendMessage(sender, {
+                    text: `*SOMEONE SENT YOU A PRIVATE PHOTO, VIDEO, OR AUDIO 🥺 AND YOU WANT TO VIEW IT 🤔*\n\n*THEN WRITE LIKE THIS ☺️*\n\n*❮VV❯*\n\n*THEN THE PRIVATE PHOTO, VIDEO, OR AUDIO WILL OPEN FOR YOU ☺️ 🥰*`,
+                    contextInfo
                 }, { quoted: m });
             }
 
-            const quoted = m.message.extendedTextMessage.contextInfo.quotedMessage;
-            let viewOnceType = null;
-            let mediaContent = null;
+            // Detect the type of quoted message
+            let type = quoted.msg ? quoted.msg.mimetype ? (quoted.msg.mimetype.startsWith('image') ? 'imageMessage'
+                : quoted.msg.mimetype.startsWith('video') ? 'videoMessage'
+                : quoted.msg.mimetype.startsWith('audio') ? 'audioMessage'
+                : null) : Object.keys(quoted.msg)[0]
+                : Object.keys(quoted)[0];
 
-            // Detect view-once message type
-            if (quoted.viewOnceMessage?.message?.imageMessage) {
-                viewOnceType = 'image';
-                mediaContent = quoted.viewOnceMessage.message.imageMessage;
-            } else if (quoted.viewOnceMessage?.message?.videoMessage) {
-                viewOnceType = 'video';
-                mediaContent = quoted.viewOnceMessage.message.videoMessage;
-            } else if (quoted.viewOnceMessage?.message?.audioMessage) {
-                viewOnceType = 'audio';
-                mediaContent = quoted.viewOnceMessage.message.audioMessage;
-            } else if (quoted.viewOnceMessage?.message?.documentMessage) {
-                viewOnceType = 'document';
-                mediaContent = quoted.viewOnceMessage.message.documentMessage;
-            } else {
-                return sock.sendMessage(sender, {
-                    text: '❌ This is not a view-once media message',
-                    contextInfo: contextInfo
+            if (!["imageMessage", "videoMessage", "audioMessage"].includes(type)) {
+                await sock.sendMessage(sender, { react: { text: '🥺', key: m.key } });
+                return await sock.sendMessage(sender, {
+                    text: `*JUST MENTION THE PHOTO, VIDEO, OR AUDIO 🥺*\n*THAT’S ALL YOU NEED TO DO 💫*`,
+                    contextInfo
                 }, { quoted: m });
             }
 
-            // Download media
-            const buffer = await sock.downloadMediaMessage(m.message.extendedTextMessage.contextInfo.stanzaId);
-            if (!buffer) throw new Error('Failed to download media');
+            // Extract proper message object
+            const msgContent = quoted.msg ? quoted.msg : quoted[type] ? quoted[type] : quoted;
 
-            // Create temp directory if not exists
-            const tempDir = path.join(__dirname, '../temp');
-            if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+            // Download media content
+            const stream = await downloadContentFromMessage(msgContent, type.replace('Message', ''));
+            let buffer = Buffer.from([]);
+            for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
 
-            // Save to temp file
-            const filename = `viewonce-${Date.now()}.${viewOnceType === 'image' ? 'jpg' : viewOnceType === 'video' ? 'mp4' : viewOnceType === 'audio' ? 'ogg' : 'bin'}`;
-            const filePath = path.join(tempDir, filename);
-            fs.writeFileSync(filePath, buffer);
-
-            // Prepare caption
-            const caption = `🔍 *View Once Restored*\n\n` +
-                `*Type:* ${viewOnceType.toUpperCase()}\n` +
-                `*Restored By:* @${sender.split('@')[0]}\n\n` +
-                `⚠️ This message was originally sent as view-once`;
-
-            // Prepare message options
-            const messageOptions = {
-                caption,
-                contextInfo: {
-                    ...contextInfo,
-                    mentionedJid: [sender],
-                    externalAdReply: {
-                        title: "Silva MD View Once",
-                        body: "View-once message restored",
-                        thumbnailUrl: "https://files.catbox.moe/5uli5p.jpeg",
-                        sourceUrl: "https://github.com/SilvaTechB/silva-md-bot",
-                        mediaType: 1,
-                        renderLargerThumbnail: true
-                    }
-                }
-            };
-
-            // Send restored media based on type
-            switch (viewOnceType) {
-                case 'image':
-                    await sock.sendMessage(sender, {
-                        image: fs.readFileSync(filePath),
-                        ...messageOptions
-                    }, { quoted: m });
-                    break;
-                
-                case 'video':
-                    await sock.sendMessage(sender, {
-                        video: fs.readFileSync(filePath),
-                        ...messageOptions
-                    }, { quoted: m });
-                    break;
-                
-                case 'audio':
-                    await sock.sendMessage(sender, {
-                        audio: fs.readFileSync(filePath),
-                        mimetype: mediaContent.mimetype || 'audio/ogg',
-                        ...messageOptions
-                    }, { quoted: m });
-                    break;
-                
-                case 'document':
-                    await sock.sendMessage(sender, {
-                        document: fs.readFileSync(filePath),
-                        fileName: mediaContent.fileName || `restored-viewonce.${mediaContent.mimetype.split('/')[1]}`,
-                        mimetype: mediaContent.mimetype,
-                        ...messageOptions
-                    }, { quoted: m });
-                    break;
+            // Prepare and send back
+            if (type === 'imageMessage') {
+                await sock.sendMessage(sender, {
+                    image: buffer,
+                    caption: msgContent?.caption || "",
+                    mimetype: msgContent?.mimetype || "image/jpeg"
+                }, { quoted: m });
+            } else if (type === 'videoMessage') {
+                await sock.sendMessage(sender, {
+                    video: buffer,
+                    caption: msgContent?.caption || "",
+                    mimetype: msgContent?.mimetype || "video/mp4"
+                }, { quoted: m });
+            } else if (type === 'audioMessage') {
+                await sock.sendMessage(sender, {
+                    audio: buffer,
+                    mimetype: msgContent?.mimetype || "audio/mp4",
+                    ptt: msgContent?.ptt || false
+                }, { quoted: m });
             }
 
-            // Delete temp file
-            fs.unlinkSync(filePath);
+            // React on success
+            await sock.sendMessage(sender, { react: { text: '😍', key: m.key } });
 
-        } catch (err) {
-            console.error('ViewOnce plugin error:', err);
-            sock.sendMessage(sender, {
-                text: `❌ Failed to restore view-once message: ${err.message}`,
-                contextInfo: contextInfo
+        } catch (error) {
+            console.error("VV Error:", error);
+            await sock.sendMessage(sender, { react: { text: '😔', key: m.key } });
+            await sock.sendMessage(sender, {
+                text: `*TYPE ❮VV❯ AGAIN 🥺*\n*AND TRY ONCE MORE 💫*\n\n_Error:_ ${error.message}`,
+                contextInfo
             }, { quoted: m });
         }
     }
